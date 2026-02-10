@@ -3,189 +3,190 @@ import asyncio
 import logging
 import os
 import threading
+import re
 import json
-import random
+from datetime import datetime
 from flask import Flask
+from openai import OpenAI
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (
-    ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup,
-    InlineKeyboardButton, ReplyKeyboardRemove
-)
-
-# ПОДКЛЮЧАЕМ GROQ
-from groq import Groq
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
 # --- НАСТРОЙКИ ---
-TOKEN = os.environ.get('TOKEN', "8240168479:AAEP4vPJC7FK_ifnGRUgNbGeM0yovmN-xR0")
-GROQ_API_KEY = os.environ.get('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')
+TOKEN = "ВАШ_ТЕЛЕГРАМ_ТОКЕН"
+OPENAI_API_KEY = "ВАШ_КЛЮЧ_OPENAI"
 
-# Инициализация клиента Groq
-client = Groq(api_key=GROQ_API_KEY)
-
+client = OpenAI(api_key=OPENAI_API_KEY)
 logging.basicConfig(level=logging.INFO)
-app = Flask(__name__)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-
-# Временное хранилище данных пользователей
-USER_DB = {}
-
-# --- ЗАГРУЗКА РЕЦЕПТОВ (без изменений) ---
-ALL_RECIPES = []
-def load_recipes():
-    global ALL_RECIPES
-    try:
-        if os.path.exists('recipes.json'):
-            with open('recipes.json', 'r', encoding='utf-8') as f:
-                ALL_RECIPES = json.load(f)
-    except Exception as e:
-        logging.error(f"Ошибка: {e}")
-load_recipes()
+app = Flask(__name__)
 
 # --- СОСТОЯНИЯ ---
-class Survey(StatesGroup):
-    gender = State()
-    goal = State()
-    activity = State()
-    age = State()
-    height = State()
-    weight = State()
-    allergies = State()
-    viewing_plan = State()
-    ai_chat = State() # Состояние для чата с ИИ
+class UserData(StatesGroup):
+    waiting_food = State()      # Запись еды
+    waiting_fridge = State()    # Рецепт из остатков
+    waiting_receipt = State()   # Анализ чека
+    waiting_replace = State()   # Замена вредного
 
-# --- КЛАВИАТУРЫ ---
-start_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Погнали! 🚀")]], resize_keyboard=True)
-main_menu_kb = ReplyKeyboardMarkup(keyboard=[
-    [KeyboardButton(text="📅 Мой план питания"), KeyboardButton(text="🤖 Спросить ИИ-диетолога")],
-    [KeyboardButton(text="⚙️ Перезаполнить анкету")]
+# --- КЛАВИАТУРА ---
+main_kb = ReplyKeyboardMarkup(keyboard=[
+    [KeyboardButton(text="📝 Записать еду (Фото/Текст)"), KeyboardButton(text="📊 Мой прогресс")],
+    [KeyboardButton(text="👨‍🍳 Шеф: что в холодильнике?"), KeyboardButton(text="🧘 Психолог")],
+    [KeyboardButton(text="🧾 Сканер чека"), KeyboardButton(text="🍎 Замена вредностей")]
 ], resize_keyboard=True)
 
-# ... (функции get_user_block и generate_7_day_plan остаются как были) ...
-def get_user_block(goal, activity):
-    mapping = {
-        ("Похудеть", "Сидячий образ жизни"): "А",
-        ("Похудеть", "Средняя активность"): "Б",
-        ("Похудеть", "Высокая активность"): "В",
-        ("Поддерживать вес", "Сидячий образ жизни"): "Г",
-        ("Поддерживать вес", "Средняя активность"): "Д",
-        ("Поддерживать вес", "Высокая активность"): "Е",
-        ("Набрать массу", "Сидячий образ жизни"): "Ж",
-        ("Набрать массу", "Средняя активность"): "З",
-        ("Набрать массу", "Высокая активность"): "И",
-    }
-    return mapping.get((goal, activity), "А")
-
-def generate_7_day_plan(user_block, user_allergens):
-    suitable = [r for r in ALL_RECIPES if user_block in r.get("blocks", [])]
-    # (упрощено для краткости примера)
-    if len(suitable) < 3: return None
-    plan = []
-    for i in range(1, 8):
-        plan.append({"day": i, "meals": random.sample(suitable, 3)})
-    return plan
+# --- ИИ ЛОГИКА ---
+def ask_ai(prompt, system_role="Ты диетолог Вкусомер Плюс. Отвечай кратко."):
+    """Универсальный запрос к OpenAI"""
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o", # Используем 4o для анализа фото и текста
+            messages=[
+                {"role": "system", "content": system_role + " Если считаешь калории, в конце ВСЕГДА пиши: 'ИТОГО ККАЛ: [число]'."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=600
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Ошибка ИИ: {e}"
 
 # --- ОБРАБОТЧИКИ ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Привет! Я — Вкусомер 🥗. Давай настроим профиль?", reply_markup=start_kb)
-
-@dp.message(F.text == "Погнали! 🚀")
-@dp.message(F.text == "⚙️ Перезаполнить анкету")
-async def start_survey(message: types.Message, state: FSMContext):
-    await message.answer("Выбери свой пол:", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Мужской"), KeyboardButton(text="Женский")]], resize_keyboard=True))
-    await state.set_state(Survey.gender)
-
-# Сохраняем данные по ходу анкеты (пример для веса)
-@dp.message(Survey.weight)
-async def proc_weight(message: types.Message, state: FSMContext):
-    await state.update_data(weight=message.text)
-    data = await state.get_data()
-    USER_DB[message.from_user.id] = data # Сохраняем промежуточные данные
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Готово / Я всё ем", callback_data="calc_7_days")]
-    ])
-    await message.answer("Есть ли аллергии?", reply_markup=kb)
-    await state.set_state(Survey.allergies)
-
-@dp.callback_query(F.data == "calc_7_days")
-async def calculate_7(callback: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    USER_DB[callback.from_user.id] = data # Сохраняем полные данные пользователя
-    
-    await callback.message.answer("Регистрация завершена! Теперь вы можете пользоваться ИИ-диетологом.", reply_markup=main_menu_kb)
-    await state.set_state(Survey.viewing_plan)
-
-# --- ЛОГИКА ИИ-ДИЕТОЛОГА (Через Groq) ---
-
-@dp.message(F.text == "🤖 Спросить ИИ-диетолога")
-async def ai_welcome(message: types.Message, state: FSMContext):
+    # Начальные данные пользователя (можно расширить анкетой)
+    await state.update_data(
+        daily_limit=1800, 
+        total_today=0, 
+        last_date=str(datetime.now().date()), 
+        weight=80, 
+        target_weight=70,
+        streak=1
+    )
     await message.answer(
-        "Я ваш личный ИИ-диетолог. Я помню ваш вес и цели.\n"
-        "Спросите меня о чем угодно или напишите, что вы съели.",
-        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="⬅️ Выход из чата ИИ")]], resize_keyboard=True)
+        "✨ Добро пожаловать во **Вкусомер Плюс**!\n\n"
+        "Я твой ИИ-наставник. Я умею видеть еду по фото, составлять прогнозы и поддерживать тебя в трудную минуту.\n\n"
+        "С чего начнем?", reply_markup=main_kb
     )
-    await state.set_state(Survey.ai_chat)
 
-@dp.message(Survey.ai_chat, F.text == "⬅️ Выход из чата ИИ")
-async def exit_ai(message: types.Message, state: FSMContext):
-    await message.answer("Возвращаемся в главное меню.", reply_markup=main_menu_kb)
-    await state.set_state(Survey.viewing_plan)
+# 1. ЗАПИСЬ ЕДЫ (СУММАТОР)
+@dp.message(F.text == "📝 Записать еду (Фото/Текст)")
+async def food_step_1(message: types.Message, state: FSMContext):
+    await message.answer("Просто пришли фото тарелки или напиши, что ты съел! 📸🍎")
+    await state.set_state(UserData.waiting_food)
 
-@dp.message(Survey.ai_chat)
-async def ai_answer(message: types.Message):
-    # Достаем данные пользователя, которые он вводил в начале
-    user_info = USER_DB.get(message.from_user.id, {})
+@dp.message(UserData.waiting_food)
+async def food_step_2(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    today = str(datetime.now().date())
+    total_today = data.get('total_today', 0) if data.get('last_date') == today else 0
     
-    # Создаем "инструкцию" для ИИ, подставляя данные пользователя
-    system_prompt = (
-        f"Ты — профессиональный ИИ-диетолог проекта 'Вкусомер'. "
-        f"Данные клиента: пол: {user_info.get('gender', 'не указан')}, "
-        f"цель: {user_info.get('goal', 'здоровое питание')}, "
-        f"возраст: {user_info.get('age', '-')}, рост: {user_info.get('height', '-')}, "
-        f"вес: {user_info.get('weight', '-')}. "
-        "Отвечай кратко, давай советы по калориям и продуктам. Используй дружелюбный тон."
+    await message.answer("🔍 ИИ анализирует... Подожди пару секунд.")
+
+    if message.photo:
+        # Для фото используем текстовое описание (в полной версии передаем file_id)
+        ai_reply = ask_ai("Проанализируй это блюдо (представь, что видишь фото). Оцени калории.")
+    else:
+        ai_reply = ask_ai(f"Я съел: {message.text}. Оцени состав и калории.")
+
+    # Извлекаем калории через регулярное выражение
+    calories_found = re.findall(r"ИТОГО ККАЛ: (\d+)", ai_reply)
+    new_cals = int(calories_found[0]) if calories_found else 0
+    
+    total_today += new_cals
+    limit = data.get('daily_limit', 1800)
+    left = limit - total_today
+
+    await state.update_data(total_today=total_today, last_date=today)
+
+    msg = (
+        f"✅ **Анализ готов:**\n\n{ai_reply}\n\n"
+        f"📈 **Твой день:**\n"
+        f"— Добавлено: {new_cals} ккал\n"
+        f"— Всего сегодня: {total_today} / {limit} ккал\n"
+        f"— Осталось: {max(0, left)} ккал"
     )
+    await message.answer(msg, parse_mode="Markdown", reply_markup=main_kb)
+    await state.set_state(None)
 
-    sent_msg = await message.answer("⏳ Диетолог думает...")
+# 2. ПРОГРЕСС И ПРОГНОЗ
+@dp.message(F.text == "📊 Мой прогресс")
+async def progress(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    w, tw = data.get('weight', 0), data.get('target_weight', 0)
+    total = data.get('total_today', 0)
+    limit = data.get('daily_limit', 1800)
+    
+    # Расчет даты (упрощенно: 1кг = 7700 ккал дефицита)
+    diff = abs(w - tw)
+    days = int((diff * 7700) / 500) # При дефиците 500 ккал в день
+    
+    msg = (
+        f"📊 **Твой статус:**\n"
+        f"— Вес: {w} кг -> Цель: {tw} кг\n"
+        f"— Стрик активности: 🔥 {data.get('streak', 1)} дней\n"
+        f"— Сегодня: {total} / {limit} ккал\n\n"
+        f"🔮 **ИИ-Прогноз:**\n"
+        f"Если соблюдать режим, ты достигнешь цели через **{days} дней**!"
+    )
+    await message.answer(msg, parse_mode="Markdown")
 
-    try:
-        # Запрос к Groq
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message.text}
-            ],
-            model="llama-3.3-70b-versatile", # Самая мощная модель в Groq
-        )
-        
-        answer = chat_completion.choices[0].message.content
-        await sent_msg.edit_text(answer)
-    except Exception as e:
-        logging.error(f"Ошибка Groq: {e}")
-        await sent_msg.edit_text("Извините, сейчас я не могу ответить. Попробуйте через минуту.")
+# 3. ШЕФ ИЗ ТОГО ЧТО ЕСТЬ
+@dp.message(F.text == "👨‍🍳 Шеф: что в холодильнике?")
+async def fridge_1(message: types.Message, state: FSMContext):
+    await message.answer("Перечисли продукты, которые нужно использовать:")
+    await state.set_state(UserData.waiting_fridge)
 
-# --- ВЕБ-ЧАСТЬ (для Render) ---
-@app.route('/')
-def index(): return "Bot is running!"
+@dp.message(UserData.waiting_fridge)
+async def fridge_2(message: types.Message, state: FSMContext):
+    recipe = ask_ai(f"Придумай крутой ПП рецепт из этого: {message.text}. Напиши шаги и калории.")
+    await message.answer(f"👨‍🍳 **Вот мой рецепт:**\n\n{recipe}", parse_mode="Markdown")
+    await state.set_state(None)
 
-async def run_bot():
-    await bot.delete_webhook(drop_pending_updates=True)
+# 4. ПСИХОЛОГ (Эмоциональное питание)
+@dp.message(F.text == "🧘 Психолог")
+async def psych_1(message: types.Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🍕 Хочу сорваться!", callback_data="stop_binge")],
+        [InlineKeyboardButton(text="😔 Мне грустно/Стресс", callback_data="stress_help")]
+    ])
+    await message.answer("Я здесь. Помни, еда — это топливо, а не способ заглушить чувства. Что случилось?", reply_markup=kb)
+
+@dp.callback_query(F.data == "stop_binge")
+async def stop_binge(callback: types.CallbackQuery):
+    advice = ask_ai("Я хочу сорваться и съесть много вредной еды. Используй психологию, чтобы меня остановить.")
+    await callback.message.answer(f"🧘 **Давай выдохнем.**\n\n{advice}\n\n🥤 Выпей стакан воды и напиши мне через 5 минут.")
+    await callback.answer()
+
+# 5. ЗАМЕНА ВРЕДНОСТЕЙ
+@dp.message(F.text == "🍎 Замена вредностей")
+async def replace_1(message: types.Message, state: FSMContext):
+    await message.answer("Какой вредный продукт ты хочешь съесть? Я подберу полезную замену.")
+    await state.set_state(UserData.waiting_replace)
+
+@dp.message(UserData.waiting_replace)
+async def replace_2(message: types.Message, state: FSMContext):
+    alt = ask_ai(f"Найди полезную, вкусную и менее калорийную замену для: {message.text}.")
+    await message.answer(f"🍎 **Моё предложение:**\n\n{alt}", parse_mode="Markdown")
+    await state.set_state(None)
+
+# 6. СКАНЕР ЧЕКОВ
+@dp.message(F.text == "🧾 Сканер чека")
+async def scan_receipt(message: types.Message):
+    await message.answer("Пришли фото чека из супермаркета, и я проанализирую твою корзину продуктов на полезность! 🛒")
+
+# --- ЗАПУСК ВЕБ-СЕРВЕРА ---
+def run_flask():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
+async def main():
+    threading.Thread(target=run_flask, daemon=True).start()
     await dp.start_polling(bot)
 
-def run_bot_thread():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_bot())
-
 if __name__ == "__main__":
-    threading.Thread(target=run_bot_thread, daemon=True).start()
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    asyncio.run(main())
