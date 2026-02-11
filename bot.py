@@ -16,7 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
-# --- НАСТРОЙКИ ---
+# --- НАСТРОЙКИ (ВАШИ КЛЮЧИ) ---
 TOKEN = "8240168479:AAEP4vPJC7FK_ifnGRUgNbGeM0yovmN-xR0"
 GROQ_API_KEY = "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"
 TELEGRAM_CHANNEL_URL = "https://t.me/+YOEpXfsmd9tiODQ6"
@@ -59,10 +59,9 @@ activity_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий
 # --- ИИ ФУНКЦИЯ (ОБНОВЛЕННЫЕ МОДЕЛИ) ---
 async def ask_ai(prompt, photo_bytes=None):
     try:
-        system_msg = "Ты ИИ-диетолог Вкусомер Плюс. Если считаешь калории, в конце ВСЕГДА пиши строго: 'ИТОГО ККАЛ: [число]'. Будь кратким и профессиональным."
+        system_msg = "Ты ИИ-диетолог Вкусомер Плюс. Если считаешь калории, в конце ВСЕГДА пиши строго: 'ИТОГО ККАЛ: [число]'. Будь кратким."
         
         if photo_bytes:
-            # Модель для фото
             base64_image = base64.b64encode(photo_bytes).decode('utf-8')
             completion = client.chat.completions.create(
                 model="llama-3.2-11b-vision-preview",
@@ -71,7 +70,6 @@ async def ask_ai(prompt, photo_bytes=None):
                           {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
             )
         else:
-            # Обновленная модель для текста (Llama 3.3 вместо старой 3.0)
             completion = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": prompt}]
@@ -80,7 +78,7 @@ async def ask_ai(prompt, photo_bytes=None):
     except Exception as e:
         return f"Ошибка ИИ: {e}"
 
-# --- ОБРАБОТЧИКИ АНКЕТЫ ---
+# --- ОБРАБОТЧИКИ ---
 
 @app.route('/')
 def index():
@@ -89,25 +87,25 @@ def index():
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("✨ Привет! Я Вкусомер Плюс. Давай рассчитаем твою норму калорий.\nВыбери свой пол:", reply_markup=gender_kb)
+    await message.answer("✨ Привет! Я Вкусомер Плюс. Давай рассчитаем твою норму.\nВыбери свой пол:", reply_markup=gender_kb)
     await state.set_state(UserSurvey.gender)
 
 @dp.message(UserSurvey.gender)
 async def proc_gender(message: types.Message, state: FSMContext):
     await state.update_data(gender=message.text)
-    await message.answer("Какая у тебя цель?", reply_markup=goal_kb)
+    await message.answer("Твоя цель?", reply_markup=goal_kb)
     await state.set_state(UserSurvey.goal)
 
 @dp.message(UserSurvey.goal)
 async def proc_goal(message: types.Message, state: FSMContext):
     await state.update_data(goal=message.text)
-    await message.answer("Твой уровень активности?", reply_markup=activity_kb)
+    await message.answer("Уровень активности?", reply_markup=activity_kb)
     await state.set_state(UserSurvey.activity)
 
 @dp.message(UserSurvey.activity)
 async def proc_act(message: types.Message, state: FSMContext):
     await state.update_data(activity=message.text)
-    await message.answer("Сколько тебе лет?", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Твой возраст:", reply_markup=ReplyKeyboardRemove())
     await state.set_state(UserSurvey.age)
 
 @dp.message(UserSurvey.age)
@@ -138,14 +136,12 @@ async def proc_target(message: types.Message, state: FSMContext):
     elif data['goal'] == "Набрать массу": norma += 400
     
     await state.update_data(daily_limit=norma, total_today=0, last_date=str(datetime.now().date()), goal_weight=int(message.text))
-    await message.answer(f"✅ Расчет готов! Твоя норма: **{norma} ккал/день**.", reply_markup=main_kb)
+    await message.answer(f"✅ Готово! Твоя норма: **{norma} ккал/день**.", reply_markup=main_kb)
     await state.set_state(None)
-
-# --- ГЛАВНЫЕ ФУНКЦИИ ---
 
 @dp.message(F.text == "📝 Записать еду (Фото/Текст)")
 async def food_start(message: types.Message, state: FSMContext):
-    await message.answer("Пришли фото тарелки или напиши, что ты съел! 📸")
+    await message.answer("Пришли фото или напиши текстом! 📸🍎")
     await state.set_state(UserStates.waiting_food)
 
 @dp.message(UserStates.waiting_food)
@@ -169,7 +165,7 @@ async def food_process(message: types.Message, state: FSMContext):
     total_today += new_cals
     
     await state.update_data(total_today=total_today, last_date=today)
-    await message.answer(f"{ai_reply}\n\n📊 Итог дня: {total_today} / {data.get('daily_limit', 2000)} ккал", reply_markup=main_kb)
+    await message.answer(f"{ai_reply}\n\n📊 Сегодня: {total_today} / {data.get('daily_limit', 2000)} ккал", reply_markup=main_kb)
     await state.set_state(None)
 
 @dp.message(F.text == "📊 Мой прогресс")
@@ -205,7 +201,7 @@ async def receipt_proc(message: types.Message, state: FSMContext):
     file = await bot.get_file(message.photo[-1].file_id)
     photo_io = await bot.download_file(file.file_path)
     res = await ask_ai("Проанализируй чек на полезность продуктов.", photo_io.read())
-    await message.answer(f"🧾 {res}\n\n📢 Наш канал: {TELEGRAM_CHANNEL_URL}")
+    await message.answer(f"🧾 {res}")
     await state.set_state(None)
 
 # --- ЗАПУСК ---
@@ -216,10 +212,6 @@ async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     threading.Thread(target=run_flask, daemon=True).start()
     scheduler.start()
-    await dp.start_polling(bot, handle_signals=False)
-
-if __name__ == "__main__":
-    asyncio.run(main())
     await dp.start_polling(bot, handle_signals=False)
 
 if __name__ == "__main__":
