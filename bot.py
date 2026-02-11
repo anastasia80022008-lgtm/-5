@@ -71,7 +71,7 @@ async def ask_ai(prompt, photo_bytes=None):
             )
         else:
             completion = client.chat.completions.create(
-                model="llama3-8b-8192",
+                model="llama3-70b-8192",
                 messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": prompt}]
             )
         return completion.choices[0].message.content
