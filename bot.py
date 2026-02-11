@@ -16,11 +16,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
-# --- НАСТРОЙКИ (ВАШИ КЛЮЧИ) ---
+# --- НАСТРОЙКИ ---
 TOKEN = "8240168479:AAEP4vPJC7FK_ifnGRUgNbGeM0yovmN-xR0"
 GROQ_API_KEY = "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"
 TELEGRAM_CHANNEL_URL = "https://t.me/+YOEpXfsmd9tiODQ6"
-PAID_BOT_URL = "https://t.me/TasteMeterPlus_bot"
 
 client = Groq(api_key=GROQ_API_KEY)
 logging.basicConfig(level=logging.INFO)
@@ -57,11 +56,13 @@ gender_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Мужской")
 goal_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Похудеть"), KeyboardButton(text="Поддерживать вес"), KeyboardButton(text="Набрать массу")]], resize_keyboard=True)
 activity_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий"), KeyboardButton(text="Средняя активность"), KeyboardButton(text="Высокая активность")]], resize_keyboard=True)
 
-# --- ИИ ФУНКЦИЯ ---
+# --- ИИ ФУНКЦИЯ (ОБНОВЛЕННЫЕ МОДЕЛИ) ---
 async def ask_ai(prompt, photo_bytes=None):
     try:
-        system_msg = "Ты ИИ-диетолог Вкусомер Плюс. Если считаешь калории, в конце ВСЕГДА пиши строго: 'ИТОГО ККАЛ: [число]'. Будь кратким."
+        system_msg = "Ты ИИ-диетолог Вкусомер Плюс. Если считаешь калории, в конце ВСЕГДА пиши строго: 'ИТОГО ККАЛ: [число]'. Будь кратким и профессиональным."
+        
         if photo_bytes:
+            # Модель для фото
             base64_image = base64.b64encode(photo_bytes).decode('utf-8')
             completion = client.chat.completions.create(
                 model="llama-3.2-11b-vision-preview",
@@ -70,8 +71,9 @@ async def ask_ai(prompt, photo_bytes=None):
                           {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
             )
         else:
+            # Обновленная модель для текста (Llama 3.3 вместо старой 3.0)
             completion = client.chat.completions.create(
-                model="llama3-70b-8192",
+                model="llama-3.3-70b-versatile",
                 messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": prompt}]
             )
         return completion.choices[0].message.content
@@ -87,31 +89,31 @@ def index():
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("✨ Привет! Я Вкусомер Плюс. Давай рассчитаем твою норму.\nВыбери свой пол:", reply_markup=gender_kb)
+    await message.answer("✨ Привет! Я Вкусомер Плюс. Давай рассчитаем твою норму калорий.\nВыбери свой пол:", reply_markup=gender_kb)
     await state.set_state(UserSurvey.gender)
 
 @dp.message(UserSurvey.gender)
 async def proc_gender(message: types.Message, state: FSMContext):
     await state.update_data(gender=message.text)
-    await message.answer("Твоя цель?", reply_markup=goal_kb)
+    await message.answer("Какая у тебя цель?", reply_markup=goal_kb)
     await state.set_state(UserSurvey.goal)
 
 @dp.message(UserSurvey.goal)
 async def proc_goal(message: types.Message, state: FSMContext):
     await state.update_data(goal=message.text)
-    await message.answer("Уровень активности?", reply_markup=activity_kb)
+    await message.answer("Твой уровень активности?", reply_markup=activity_kb)
     await state.set_state(UserSurvey.activity)
 
 @dp.message(UserSurvey.activity)
 async def proc_act(message: types.Message, state: FSMContext):
     await state.update_data(activity=message.text)
-    await message.answer("Возраст:", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Сколько тебе лет?", reply_markup=ReplyKeyboardRemove())
     await state.set_state(UserSurvey.age)
 
 @dp.message(UserSurvey.age)
 async def proc_age(message: types.Message, state: FSMContext):
     await state.update_data(age=int(message.text))
-    await message.answer("Рост (см):")
+    await message.answer("Твой рост (см):")
     await state.set_state(UserSurvey.height)
 
 @dp.message(UserSurvey.height)
@@ -136,7 +138,7 @@ async def proc_target(message: types.Message, state: FSMContext):
     elif data['goal'] == "Набрать массу": norma += 400
     
     await state.update_data(daily_limit=norma, total_today=0, last_date=str(datetime.now().date()), goal_weight=int(message.text))
-    await message.answer(f"✅ Готово! Твоя норма: **{norma} ккал/день**.\nТеперь я буду считать всё, что ты ешь.", reply_markup=main_kb)
+    await message.answer(f"✅ Расчет готов! Твоя норма: **{norma} ккал/день**.", reply_markup=main_kb)
     await state.set_state(None)
 
 # --- ГЛАВНЫЕ ФУНКЦИИ ---
@@ -167,7 +169,7 @@ async def food_process(message: types.Message, state: FSMContext):
     total_today += new_cals
     
     await state.update_data(total_today=total_today, last_date=today)
-    await message.answer(f"{ai_reply}\n\n📊 Итого за день: {total_today} / {data['daily_limit']} ккал", reply_markup=main_kb)
+    await message.answer(f"{ai_reply}\n\n📊 Итог дня: {total_today} / {data.get('daily_limit', 2000)} ккал", reply_markup=main_kb)
     await state.set_state(None)
 
 @dp.message(F.text == "📊 Мой прогресс")
@@ -185,7 +187,7 @@ async def psych(message: types.Message):
 @dp.callback_query(F.data == "stop_b")
 async def stop_b(callback: types.CallbackQuery):
     res = await ask_ai("Я хочу сорваться. Помоги мне остановиться.")
-    await callback.message.answer(f"🧘 {res}\n\n🥤 Выпей воды и напиши мне через 5 минут.")
+    await callback.message.answer(f"🧘 {res}\n\n🥤 Выпей воды и подожди 5 мин.")
     await callback.answer()
 
 @dp.message(F.text == "🔔 Напомнить через 3ч")
@@ -203,7 +205,7 @@ async def receipt_proc(message: types.Message, state: FSMContext):
     file = await bot.get_file(message.photo[-1].file_id)
     photo_io = await bot.download_file(file.file_path)
     res = await ask_ai("Проанализируй чек на полезность продуктов.", photo_io.read())
-    await message.answer(f"🧾 {res}\n\n📢 Наш канал: {TELEGRAM_CHANNEL_URL}\n💎 Плюс: {PAID_BOT_URL}")
+    await message.answer(f"🧾 {res}\n\n📢 Наш канал: {TELEGRAM_CHANNEL_URL}")
     await state.set_state(None)
 
 # --- ЗАПУСК ---
