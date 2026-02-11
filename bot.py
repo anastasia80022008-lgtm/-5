@@ -16,7 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
-# --- НАСТРОЙКИ (ВАШИ КЛЮЧИ) ---
+# --- НАСТРОЙКИ ---
 TOKEN = "8240168479:AAEP4vPJC7FK_ifnGRUgNbGeM0yovmN-xR0"
 GROQ_API_KEY = "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"
 TELEGRAM_CHANNEL_URL = "https://t.me/+YOEpXfsmd9tiODQ6"
@@ -50,26 +50,29 @@ main_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="📝 Записать еду (Фото/Текст)"), KeyboardButton(text="📊 Мой прогресс")],
     [KeyboardButton(text="👨‍🍳 Шеф: что в холодильнике?"), KeyboardButton(text="🧘 Психолог")],
     [KeyboardButton(text="🍎 Замена вредностей"), KeyboardButton(text="🧾 Сканер чека")],
-    [KeyboardButton(text="🔔 Напомнить поесть через 3ч")]
+    [KeyboardButton(text="🔔 Напомнить через 3ч")]
 ], resize_keyboard=True)
 
 gender_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Мужской"), KeyboardButton(text="Женский")]], resize_keyboard=True)
 goal_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Похудеть"), KeyboardButton(text="Поддерживать вес"), KeyboardButton(text="Набрать массу")]], resize_keyboard=True)
 activity_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий"), KeyboardButton(text="Средняя активность"), KeyboardButton(text="Высокая активность")]], resize_keyboard=True)
 
-# --- ИИ ФУНКЦИЯ ---
+# --- ИИ ФУНКЦИЯ (ОБНОВЛЕННЫЕ МОДЕЛИ) ---
 async def ask_ai(prompt, photo_bytes=None):
     try:
         system_msg = "Ты ИИ-диетолог Вкусомер Плюс. Если считаешь калории, в конце ВСЕГДА пиши строго: 'ИТОГО ККАЛ: [число]'. Будь кратким."
+        
         if photo_bytes:
+            # Обновленная VISION модель
             base64_image = base64.b64encode(photo_bytes).decode('utf-8')
             completion = client.chat.completions.create(
-                model="llama-3.2-11b-vision-preview",
+                model="llama-3.2-90b-vision-preview", # Используем актуальную 90b версию
                 messages=[{"role": "system", "content": system_msg},
                           {"role": "user", "content": [{"type": "text", "text": prompt},
                           {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
             )
         else:
+            # Обновленная ТЕКСТОВАЯ модель
             completion = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": prompt}]
@@ -78,7 +81,7 @@ async def ask_ai(prompt, photo_bytes=None):
     except Exception as e:
         return f"Ошибка ИИ: {e}"
 
-# --- ОБРАБОТЧИКИ АНКЕТЫ ---
+# --- ОБРАБОТЧИКИ ---
 
 @app.route('/')
 def index():
@@ -87,52 +90,47 @@ def index():
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("✨ Привет! Я Вкусомер Плюс. Давай рассчитаем твою норму калорий.\nВыбери свой пол:", reply_markup=gender_kb)
+    await message.answer("✨ Привет! Я Вкусомер Плюс. Давай рассчитаем твою норму.\nВыбери пол:", reply_markup=gender_kb)
     await state.set_state(UserSurvey.gender)
 
 @dp.message(UserSurvey.gender)
 async def proc_gender(message: types.Message, state: FSMContext):
     await state.update_data(gender=message.text)
-    await message.answer("Какая у тебя цель?", reply_markup=goal_kb)
+    await message.answer("Твоя цель?", reply_markup=goal_kb)
     await state.set_state(UserSurvey.goal)
 
 @dp.message(UserSurvey.goal)
 async def proc_goal(message: types.Message, state: FSMContext):
     await state.update_data(goal=message.text)
-    await message.answer("Твой уровень активности?", reply_markup=activity_kb)
+    await message.answer("Уровень активности?", reply_markup=activity_kb)
     await state.set_state(UserSurvey.activity)
 
 @dp.message(UserSurvey.activity)
 async def proc_act(message: types.Message, state: FSMContext):
     await state.update_data(activity=message.text)
-    await message.answer("Сколько тебе лет?", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Возраст:", reply_markup=ReplyKeyboardRemove())
     await state.set_state(UserSurvey.age)
 
 @dp.message(UserSurvey.age)
 async def proc_age(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return await message.answer("Введи число!")
     await state.update_data(age=int(message.text))
-    await message.answer("Твой рост (см):")
+    await message.answer("Рост (см):")
     await state.set_state(UserSurvey.height)
 
 @dp.message(UserSurvey.height)
 async def proc_h(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return await message.answer("Введи число!")
     await state.update_data(height=int(message.text))
     await message.answer("Текущий вес (кг):")
     await state.set_state(UserSurvey.weight)
 
 @dp.message(UserSurvey.weight)
 async def proc_w(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return await message.answer("Введи число!")
     await state.update_data(weight=int(message.text))
     await message.answer("Желаемый вес (кг):")
     await state.set_state(UserSurvey.target_weight)
 
 @dp.message(UserSurvey.target_weight)
 async def proc_target(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return await message.answer("Введи число!")
-    target_w = int(message.text)
     data = await state.get_data()
     w, h, a, gender = data['weight'], data['height'], data['age'], data['gender']
     bmr = (10 * w) + (6.25 * h) - (5 * a) + (5 if gender == "Мужской" else -161)
@@ -140,15 +138,13 @@ async def proc_target(message: types.Message, state: FSMContext):
     if data['goal'] == "Похудеть": norma -= 400
     elif data['goal'] == "Набрать массу": norma += 400
     
-    await state.update_data(daily_limit=norma, total_today=0, last_date=str(datetime.now().date()), goal_weight=target_w, streak=1)
+    await state.update_data(daily_limit=norma, total_today=0, last_date=str(datetime.now().date()), goal_weight=int(message.text), streak=1)
     await message.answer(f"✅ Расчет готов! Твоя норма: **{norma} ккал/день**.", reply_markup=main_kb)
     await state.set_state(None)
 
-# --- ГЛАВНЫЕ ФУНКЦИИ ---
-
 @dp.message(F.text == "📝 Записать еду (Фото/Текст)")
 async def food_start(message: types.Message, state: FSMContext):
-    await message.answer("Пришли фото тарелки или опиши еду текстом! 📸")
+    await message.answer("Пришли фото тарелки или напиши текстом! 📸🍎")
     await state.set_state(UserStates.waiting_food)
 
 @dp.message(UserStates.waiting_food)
@@ -157,7 +153,7 @@ async def food_process(message: types.Message, state: FSMContext):
     today = str(datetime.now().date())
     total_today = data.get('total_today', 0) if data.get('last_date') == today else 0
     
-    await message.answer("🔍 Анализирую...")
+    await message.answer("🔍 Вкусомер анализирует...")
     photo_data = None
     if message.photo:
         file = await bot.get_file(message.photo[-1].file_id)
@@ -180,17 +176,16 @@ async def progress(message: types.Message, state: FSMContext):
     data = await state.get_data()
     w, tw = data.get('weight', 0), data.get('goal_weight', 0)
     days = int((abs(w - tw) * 7700) / 500) if w and tw else 0
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📢 Канал", url=TELEGRAM_CHANNEL_URL), InlineKeyboardButton(text="💎 Плюс", url=PAID_BOT_URL)]])
-    await message.answer(f"📊 Вес: {w}кг → Цель: {tw}кг\n🔥 Стрик: {data.get('streak', 1)} дн.\n🔮 Результат через **~{days} дней**!", reply_markup=kb)
+    await message.answer(f"📊 Вес: {w}кг → Цель: {tw}кг\n🔥 Стрик: {data.get('streak', 1)} дн.\n🔮 Результат будет через **~{days} дней**!")
 
 @dp.message(F.text == "🧘 Психолог")
 async def psych(message: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🍕 СТОП СРЫВ!", callback_data="stop_b")]])
-    await message.answer("Нажми кнопку, если трудно держаться.", reply_markup=kb)
+    await message.answer("Срыв начинается в голове. Нажми кнопку, если трудно.", reply_markup=kb)
 
 @dp.callback_query(F.data == "stop_b")
 async def stop_b(callback: types.CallbackQuery):
-    res = await ask_ai("Я хочу сорваться. Помоги мне.")
+    res = await ask_ai("Я хочу сорваться. Помоги мне остановиться.")
     await callback.message.answer(f"🧘 {res}\n\n🥤 Выпей воды и подожди 5 мин.")
     await callback.answer()
 
@@ -209,18 +204,18 @@ async def receipt_proc(message: types.Message, state: FSMContext):
     file = await bot.get_file(message.photo[-1].file_id)
     photo_io = await bot.download_file(file.file_path)
     res = await ask_ai("Проанализируй чек на полезность продуктов.", photo_io.read())
-    await message.answer(f"🧾 {res}\n\n📢 Канал: {TELEGRAM_CHANNEL_URL}")
+    await message.answer(f"🧾 {res}")
     await state.set_state(None)
 
-@dp.message(F.text == "🍎 Замена вредностей")
-async def replace_start(message: types.Message, state: FSMContext):
-    await message.answer("Что вредное ты хочешь съесть?")
-    await state.set_state(UserStates.waiting_replace)
+@dp.message(F.text == "👨‍🍳 Шеф: что в холодильнике?")
+async def chef_start(message: types.Message, state: FSMContext):
+    await message.answer("Напиши список продуктов:")
+    await state.set_state(UserStates.waiting_fridge)
 
-@dp.message(UserStates.waiting_replace)
-async def replace_proc(message: types.Message, state: FSMContext):
-    res = await ask_ai(f"Найди полезную замену для: {message.text}")
-    await message.answer(f"🍎 {res}")
+@dp.message(UserStates.waiting_fridge)
+async def chef_proc(message: types.Message, state: FSMContext):
+    res = await ask_ai(f"Придумай ПП рецепт из этого: {message.text}")
+    await message.answer(f"👨‍🍳 {res}")
     await state.set_state(None)
 
 # --- ЗАПУСК ---
