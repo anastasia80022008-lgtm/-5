@@ -44,13 +44,13 @@ class UserStates(StatesGroup):
     waiting_fridge = State()
     waiting_replace = State()
     waiting_recipe_idea = State()
-    waiting_receipt = State()  # ТЕПЕРЬ ОШИБКИ НЕ БУДЕТ
+    waiting_receipt = State()
     waiting_chat = State()
 
 # --- КЛАВИАТУРЫ ---
 main_kb = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="📝 Записать еду (Фото/Текст)"), KeyboardButton(text="📊 Мой прогресс")],
-    [KeyboardButton(text="👨‍🍳 Шеф: что в холодильнике?"), KeyboardButton(text="🥗 Что приготовить сегодня?")],
+    [KeyboardButton(text="👨‍🍳 Шеф: что в холодильнике?"), KeyboardButton(text="🥗 Что приготовить?")],
     [KeyboardButton(text="🧘 Психолог"), KeyboardButton(text="🍎 Замена вредностей")],
     [KeyboardButton(text="💬 Просто поболтать"), KeyboardButton(text="🔔 Напомнить через 3ч")],
     [KeyboardButton(text="🧾 Сканер чека")]
@@ -58,51 +58,55 @@ main_kb = ReplyKeyboardMarkup(keyboard=[
 
 chat_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 Выйти из чата")]], resize_keyboard=True)
 
-# --- ИИ ФУНКЦИЯ ---
+# --- ИИ ФУНКЦИЯ (АКТУАЛЬНЫЕ МОДЕЛИ) ---
 async def ask_ai(prompt, photo_bytes=None, system_context="Ты эксперт-диетолог Вкусомер Плюс."):
     try:
         sys_prompt = system_context + " Если считаешь калории, в конце ВСЕГДА пиши строго: 'ИТОГО ККАЛ: [число]'. Будь кратким."
+        
         if photo_bytes:
+            # Используем llama-3.2-11b-vision-preview (Vision)
             base64_image = base64.b64encode(photo_bytes).decode('utf-8')
             completion = client.chat.completions.create(
-                model="llama-3.2-90b-vision-preview",
+                model="llama-3.2-11b-vision-preview",
                 messages=[{"role": "system", "content": sys_prompt},
                           {"role": "user", "content": [{"type": "text", "text": prompt},
                           {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
             )
         else:
+            # Используем llama-3.3-70b-versatile (Text)
             completion = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}]
             )
         return completion.choices[0].message.content
     except Exception as e:
+        logging.error(f"AI Error: {e}")
         return f"🧘 Ошибка нейросети. Попробуй позже. ({e})"
 
 # --- ОБРАБОТЧИКИ АНКЕТЫ ---
 
 @app.route('/')
 def index():
-    return "Vkusomer Plus is Active!"
+    return "Vkusomer Plus is Live!"
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("✨ Привет! Я Вкусомер Плюс. Давай рассчитаем твою норму калорий.\n\nВыбери пол:", 
+    await message.answer("✨ Привет! Я Вкусомер Плюс. Рассчитаем твою норму калорий.\nВыбери пол:", 
                          reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Мужской"), KeyboardButton(text="Женский")]], resize_keyboard=True))
     await state.set_state(UserSurvey.gender)
 
 @dp.message(UserSurvey.gender)
 async def proc_gender(message: types.Message, state: FSMContext):
     await state.update_data(gender=message.text)
-    goal_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Похудеть"), KeyboardButton(text="Поддерживать вес"), KeyboardButton(text="Набрать массу")]], resize_keyboard=True)
+    goal_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Похудеть"), KeyboardButton(text="Поддержать вес"), KeyboardButton(text="Набрать массу")]], resize_keyboard=True)
     await message.answer("Какая у тебя цель?", reply_markup=goal_kb)
     await state.set_state(UserSurvey.goal)
 
 @dp.message(UserSurvey.goal)
 async def proc_goal(message: types.Message, state: FSMContext):
     await state.update_data(goal=message.text)
-    act_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий"), KeyboardButton(text="Средний"), KeyboardButton(text="Высокий")]], resize_keyboard=True)
+    act_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий"), KeyboardButton(text="Средняя активность"), KeyboardButton(text="Высокая активность")]], resize_keyboard=True)
     await message.answer("Твой уровень активности?", reply_markup=act_kb)
     await state.set_state(UserSurvey.activity)
 
@@ -142,23 +146,23 @@ async def proc_target(message: types.Message, state: FSMContext):
     elif data['goal'] == "Набрать массу": norma += 400
     
     await state.update_data(daily_limit=norma, total_today=0, last_date=str(datetime.now().date()), goal_weight=target_w)
-    await message.answer(f"✅ Готово! Твоя норма: **{norma} ккал/день**.\nТеперь пользуйся всеми функциями!", reply_markup=main_kb)
+    await message.answer(f"✅ Готово! Твоя норма: **{norma} ккал/день**.", reply_markup=main_kb)
     await state.set_state(None)
 
-# --- ФУНКЦИИ МЕНЮ ---
+# --- ГЛАВНЫЕ ФУНКЦИИ ---
 
 @dp.message(F.text == "💬 Просто поболтать")
 async def chat_start(message: types.Message, state: FSMContext):
-    await message.answer("Я тебя слушаю! Пиши что угодно. 😊", reply_markup=chat_kb)
+    await message.answer("Я тебя слушаю! Пиши что угодно о питании или жизни. 😊", reply_markup=chat_kb)
     await state.set_state(UserStates.waiting_chat)
 
 @dp.message(UserStates.waiting_chat)
-async def chat_proc(message: types.Message, state: FSMContext):
+async def chat_process(message: types.Message, state: FSMContext):
     if message.text == "🔙 Выйти из чата":
-        await message.answer("Возвращаюсь в меню.", reply_markup=main_kb)
+        await message.answer("Возвращаюсь в главное меню.", reply_markup=main_kb)
         await state.set_state(None)
         return
-    res = await ask_ai(message.text, system_context="Ты дружелюбный диетолог. Общайся свободно.")
+    res = await ask_ai(message.text, system_context="Ты дружелюбный диетолог. Поддерживай беседу.")
     await message.answer(res)
 
 @dp.message(F.text == "📝 Записать еду (Фото/Текст)")
@@ -169,7 +173,8 @@ async def food_start(message: types.Message, state: FSMContext):
 @dp.message(UserStates.waiting_food)
 async def food_process(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    total = data.get('total_today', 0) if data.get('last_date') == str(datetime.now().date()) else 0
+    today = str(datetime.now().date())
+    total = data.get('total_today', 0) if data.get('last_date') == today else 0
     await message.answer("🔍 Анализирую...")
     
     photo_data = None
@@ -184,46 +189,46 @@ async def food_process(message: types.Message, state: FSMContext):
     cals = re.findall(r"ИТОГО ККАЛ: (\d+)", ai_reply)
     new_cals = int(cals[0]) if cals else 0
     total += new_cals
-    await state.update_data(total_today=total, last_date=str(datetime.now().date()))
-    await message.answer(f"{ai_reply}\n\n📊 Итого: {total} / {data.get('daily_limit', 2000)} ккал", reply_markup=main_kb)
+    await state.update_data(total_today=total, last_date=today)
+    await message.answer(f"{ai_reply}\n\n📊 Итого за день: {total} / {data.get('daily_limit', 2000)} ккал", reply_markup=main_kb)
     await state.set_state(None)
 
-@dp.message(F.text == "🥗 Что приготовить сегодня?")
+@dp.message(F.text == "🥗 Что приготовить?")
 async def recipe_start(message: types.Message, state: FSMContext):
-    await message.answer("Какое блюдо ты хочешь? (Например: ПП-обед)")
+    await message.answer("Какое блюдо ты хочешь? (Например: ПП-завтрак из яиц)")
     await state.set_state(UserStates.waiting_recipe_idea)
 
 @dp.message(UserStates.waiting_recipe_idea)
 async def recipe_proc(message: types.Message, state: FSMContext):
-    res = await ask_ai(f"Дай полный рецепт для: {message.text}. С шагами и граммами.", system_context="Ты шеф-повар.")
+    res = await ask_ai(f"Дай подробный рецепт для: {message.text}. С шагами и граммами.", system_context="Ты шеф-повар.")
     await message.answer(res, reply_markup=main_kb)
     await state.set_state(None)
 
 @dp.message(F.text == "👨‍🍳 Шеф: что в холодильнике?")
 async def chef_start(message: types.Message, state: FSMContext):
-    await message.answer("Напиши продукты через запятую:")
+    await message.answer("Напиши список продуктов через запятую:")
     await state.set_state(UserStates.waiting_fridge)
 
 @dp.message(UserStates.waiting_fridge)
 async def chef_proc(message: types.Message, state: FSMContext):
-    res = await ask_ai(f"Придумай рецепт из: {message.text}")
+    res = await ask_ai(f"Придумай ПП рецепт из: {message.text}")
     await message.answer(res, reply_markup=main_kb)
     await state.set_state(None)
 
 @dp.message(F.text == "🧘 Психолог")
 async def psych(message: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🍕 СТОП СРЫВ!", callback_data="stop_b")]])
-    await message.answer("Трудно держаться? Нажми кнопку.", reply_markup=kb)
+    await message.answer("Чувствуешь, что хочешь съесть лишнего? Нажми кнопку.", reply_markup=kb)
 
 @dp.callback_query(F.data == "stop_b")
 async def stop_b(callback: types.CallbackQuery):
-    res = await ask_ai("Я хочу сорваться. Помоги мне.")
-    await callback.message.answer(f"🧘 {res}\n\n🥤 Выпей воды и подожди 5 мин.")
+    res = await ask_ai("Я хочу сорваться. Помоги мне остановиться.")
+    await callback.message.answer(f"🧘 {res}\n\n🥤 Выпей воды и напиши мне через 5 минут.")
     await callback.answer()
 
 @dp.message(F.text == "🔔 Напомнить через 3ч")
 async def set_alarm(message: types.Message):
-    scheduler.add_job(lambda: bot.send_message(message.chat.id, "🔔 Пора перекусить!"), "interval", minutes=180, id=f"rem_{message.chat.id}", replace_existing=True)
+    scheduler.add_job(lambda: bot.send_message(message.chat.id, "🔔 Время подкрепиться!"), "interval", minutes=180, id=f"rem_{message.chat.id}", replace_existing=True)
     await message.answer("✅ Напомню через 3 часа!")
 
 @dp.message(F.text == "🧾 Сканер чека")
@@ -246,7 +251,7 @@ async def replace_start(message: types.Message, state: FSMContext):
 
 @dp.message(UserStates.waiting_replace)
 async def replace_proc(message: types.Message, state: FSMContext):
-    res = await ask_ai(f"Найди замену для: {message.text}")
+    res = await ask_ai(f"Найди ПП замену для: {message.text}")
     await message.answer(res, reply_markup=main_kb)
     await state.set_state(None)
 
