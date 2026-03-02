@@ -5,10 +5,8 @@ import os
 import threading
 import re
 import sqlite3
-import base64
 from datetime import datetime
-from google import genai
-from google.genai import types as ai_types
+import google.generativeai as genai
 from flask import Flask
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -25,7 +23,10 @@ TOKEN = "8240168479:AAEP4vPJC7FK_ifnGRUgNbGeM0yovmN-xR0"
 GEMINI_KEY = "AIzaSyDijUmn0uvUX6aG9C5wqWcIy6O4QXoXzn4"
 TG_CHANNEL = "https://t.me/+YOEpXfsmd9tiODQ6"
 
-client = genai.Client(api_key=GEMINI_KEY)
+# Настройка бесплатной нейросети Gemini
+genai.configure(api_key=GEMINI_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
+
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -39,13 +40,12 @@ def db_commit(sql, params=()):
 
 def db_query(sql, params=()):
     with sqlite3.connect('vkusomer.db') as conn:
-        cursor = conn.cursor()
-        cursor.execute(sql, params)
+        cursor = conn.cursor(); cursor.execute(sql, params)
         return cursor.fetchone()
 
 db_commit('''CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY, norma INTEGER, total_today INTEGER, 
-    water INTEGER, last_date TEXT, weight INTEGER, target INTEGER, avatar TEXT)''')
+    water INTEGER, last_date TEXT, weight INTEGER, target INTEGER)''')
 
 # --- СОСТОЯНИЯ ---
 class UserSurvey(StatesGroup):
@@ -64,98 +64,75 @@ def get_main_kb():
         [KeyboardButton(text="🥗 Что приготовить сегодня?"), KeyboardButton(text="🧘 Психолог")],
         [KeyboardButton(text="🍎 Замена вредностей"), KeyboardButton(text="📅 Меню на месяц")],
         [KeyboardButton(text="🔔 Напомнить через 3ч"), KeyboardButton(text="💧 +1 Стакан воды")],
-        [KeyboardButton(text="💬 Просто поболтать")]
+        [KeyboardButton(text="💬 Просто поболтать"), KeyboardButton(text="🧾 Сканер чека")]
     ], resize_keyboard=True)
 
-# --- ЛОГИКА ИИ (Диетолог) ---
-chat_history = {}
-
+# --- ЛОГИКА ИИ ---
 async def ask_dietologist(user_id, message_obj, system_type="default"):
     prompts = {
-        "default": "Ты - Диетолог Вкусомер Плюс. Ты лучший эксперт по ЗОЖ. Общайся вежливо, используй много эмодзи. Если человек пишет, что поел - считай калории и пиши в конце СТРОГО: 'ИТОГО ККАЛ: [число]'.",
-        "chef": "Ты шеф-повар. Расписывай рецепты ОЧЕНЬ подробно: ингредиенты с граммами и пошаговая инструкция 1, 2, 3.",
-        "replace": "Ты эксперт по заменам. Найди крутую ПП-альтернативу вредной еде.",
-        "month": "Составь план на месяц. Список продуктов (база + свежее) и меню по неделям."
+        "default": "Ты - Диетолог Вкусомер Плюс. Ты можешь просто болтать. Если пишут про еду - считай калории и пиши в конце СТРОГО: 'ИТОГО ККАЛ: [число]'.",
+        "chef": "Ты шеф-повар. Давай очень подробные рецепты с граммами и шагами 1, 2, 3...",
+        "replace": "Найди полезную ПП замену вредному продукту.",
+        "month": "Составь меню на месяц. Список продуктов (база + свежее) и план блюд."
     }
     
-    if user_id not in chat_history: chat_history[user_id] = []
-    
-    user_text = message_obj.text or message_obj.caption or "Анализ медиа"
-    final_prompt = f"{prompts.get(system_type)} \nКонтекст: {chat_history[user_id][-4:]} \nСообщение: {user_text}"
+    prompt_text = prompts.get(system_type, prompts["default"])
+    user_text = message_obj.text or message_obj.caption or "Анализ"
     
     try:
-        if message_obj.photo or message_obj.voice or message_obj.video_note:
-            # Обработка фото, голоса и видео-кружков
-            file_id = None
-            mime = "image/jpeg"
-            if message_obj.photo: file_id = message_obj.photo[-1].file_id
-            elif message_obj.voice: file_id = message_obj.voice.file_id; mime = "audio/ogg"
-            elif message_obj.video_note: file_id = message_obj.video_note.file_id; mime = "video/mp4"
-            
-            file = await bot.get_file(file_id)
-            data = await bot.download_file(file.file_path)
-            response = client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=[final_prompt, ai_types.Part.from_bytes(data=data.read(), mime_type=mime)]
-            )
+        if message_obj.photo:
+            file = await bot.get_file(message_obj.photo[-1].file_id)
+            img = await bot.download_file(file.file_path)
+            # Gemini Vision требует байты
+            response = model.generate_content([prompt_text + "\nПользователь: " + user_text, {"mime_type": "image/jpeg", "data": img.read()}])
         else:
-            response = client.models.generate_content(model="gemini-1.5-flash", contents=final_prompt)
-        
-        chat_history[user_id].append(user_text[:100])
+            response = model.generate_content(prompt_text + "\nПользователь: " + user_text)
         return response.text
     except Exception as e:
-        return f"🧘 Диетолог отвлекся... ({e})"
+        return f"🧘 Диетолог отвлекся... Попробуй еще раз. ({e})"
 
-# --- ОБРАБОТЧИКИ ---
+# --- АНКЕТА ---
 
 @app.route('/')
-def index(): return "Active"
+def index(): return "OK"
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    welcome = (
-        "✨ **Добро пожаловать в мир здоровья с Вкусомер Плюс!** 🥗\n\n"
-        "Я — твой персональный ИИ-наставник и **Диетолог**. Я здесь, чтобы сделать твой путь к идеальному телу легким и вкусным! 💪\n\n"
-        "🍏 **Я умею:**\n"
-        "Распознавать еду по фото, голосу и видео-кружкам. \n"
-        "Составлять меню на месяц и рецепты из остатков.\n"
-        "Поддерживать тебя психологически, чтобы не было срывов.\n\n"
-        "Давай начнем! Твой пол? 👤"
-    )
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Мужской"), KeyboardButton(text="Женский")]], resize_keyboard=True)
+    welcome = "✨ **Привет! Я Вкусомер Плюс.** 🥗\n\nЯ твой ИИ-Диетолог. Давай создадим профиль. Твой пол? 👤"
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Мужской"), KeyboardButton(text="Женский")]], resize_keyboard=True, one_time_keyboard=True)
     await message.answer(welcome, reply_markup=kb, parse_mode="Markdown")
     await state.set_state(UserSurvey.gender)
 
 @dp.message(UserSurvey.gender)
 async def proc_gender(message: types.Message, state: FSMContext):
     await state.update_data(gender=message.text)
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Похудеть"), KeyboardButton(text="Набрать массу"), KeyboardButton(text="Поддерживать вес")]], resize_keyboard=True)
-    await message.answer("🎯 Какая наша цель?", reply_markup=kb)
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Похудеть"), KeyboardButton(text="Набрать массу"), KeyboardButton(text="Поддерживать вес")]], resize_keyboard=True, one_time_keyboard=True)
+    await message.answer("🎯 Твоя цель?", reply_markup=kb)
     await state.set_state(UserSurvey.goal)
 
 @dp.message(UserSurvey.goal)
 async def proc_goal(message: types.Message, state: FSMContext):
     await state.update_data(goal=message.text)
     if message.text in ["Похудеть", "Набрать массу"]:
-        await message.answer("🏁 К какому весу мы стремимся? (кг)", reply_markup=ReplyKeyboardRemove())
+        await message.answer("🏁 Какой вес твоя цель? (кг)", reply_markup=ReplyKeyboardRemove())
         await state.set_state(UserSurvey.target_w)
     else:
         await state.set_state(UserSurvey.activity)
-        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий"), KeyboardButton(text="Средний"), KeyboardButton(text="Высокий")]], resize_keyboard=True)
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий"), KeyboardButton(text="Средний"), KeyboardButton(text="Высокий")]], resize_keyboard=True, one_time_keyboard=True)
         await message.answer("🏃‍♂️ Твоя активность?", reply_markup=kb)
 
 @dp.message(UserSurvey.target_w)
 async def proc_tw(message: types.Message, state: FSMContext):
     await state.update_data(target_w=message.text)
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий"), KeyboardButton(text="Средний"), KeyboardButton(text="Высокий")]], resize_keyboard=True)
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий"), KeyboardButton(text="Средний"), KeyboardButton(text="Высокий")]], resize_keyboard=True, one_time_keyboard=True)
     await message.answer("🏃‍♂️ Твоя активность?", reply_markup=kb)
     await state.set_state(UserSurvey.activity)
 
 @dp.message(UserSurvey.activity)
 async def proc_act(message: types.Message, state: FSMContext):
     await state.update_data(activity=message.text)
-    await message.answer("🎂 Сколько тебе полных лет?", reply_markup=ReplyKeyboardRemove())
+    await message.answer("🎂 Твой возраст?", reply_markup=ReplyKeyboardRemove())
     await state.set_state(UserSurvey.age)
 
 @dp.message(UserSurvey.age)
@@ -176,21 +153,21 @@ async def survey_final(message: types.Message, state: FSMContext):
     bmr = (10 * w) + (6.25 * d['height']) - (5 * d['age']) + (5 if d['gender'] == "Мужской" else -161)
     norma = int(bmr * 1.3)
     if d['goal'] == "Похудеть": norma -= 400
-    db_commit("INSERT OR REPLACE INTO users (id, norma, total_today, water, last_date, weight, target, avatar) VALUES (?, ?, 0, 0, ?, ?, ?, ?)",
-              (message.from_user.id, norma, str(datetime.now().date()), w, d.get('target_w', w), "🧘 Спокойный дзен"))
-    await message.answer("✅ **Профиль успешно создан! Тест пройден.**")
-    await message.answer(f"Твоя норма: **{norma} ккал**. Пиши мне или жми кнопки!", reply_markup=get_main_kb())
+    db_commit("INSERT OR REPLACE INTO users (id, norma, total_today, water, last_date, weight, target) VALUES (?, ?, 0, 0, ?, ?, ?)",
+              (message.from_user.id, norma, str(datetime.now().date()), w, d.get('target_w', w)))
+    await message.answer("✅ **Твой профиль успешно создан! Тест пройден.**")
+    await message.answer(f"Твоя норма: **{norma} ккал**. Теперь я твой Диетолог. Пиши мне что угодно!", reply_markup=get_main_kb())
     await state.clear()
 
 # --- ФУНКЦИИ ---
 
 @dp.message(F.text == "📊 Мой статус")
 async def show_status(message: types.Message):
-    u = db_query("SELECT norma, total_today, water, weight, target, avatar FROM users WHERE id=?", (message.from_user.id,))
+    u = db_query("SELECT norma, total_today, water, weight, target FROM users WHERE id=?", (message.from_user.id,))
     if u:
-        percent = int((u[1]/u[0])*100) if u[1]>0 else 0
+        percent = min(int((u[1]/u[0])*100), 100) if u[1]>0 else 0
         bar = "🟩" * (percent // 10) + "⬜" * (10 - (percent // 10))
-        await message.answer(f"📊 **СТАТУС:**\nЦель: {u[3]} -> {u[4]} кг\nАватар: {u[5]}\n🍎 Еда: {bar} {u[1]}/{u[0]}\n💧 Вода: {'🟦' * u[2]} {u[2]}/8\n\n📢 Канал: {TG_CHANNEL}")
+        await message.answer(f"📊 **СТАТУС:**\nЦель: {u[3]} -> {u[4]} кг\n🍎 Еда: {bar} {u[1]}/{u[0]}\n💧 Вода: {'🟦' * u[2]} {u[2]}/8\n\n📢 Канал: {TG_CHANNEL}")
 
 @dp.message(F.text == "💧 +1 Стакан воды")
 async def water_up(message: types.Message):
@@ -200,14 +177,14 @@ async def water_up(message: types.Message):
     await message.answer(f"💧 Стакан засчитан! ({val}/8)")
     if val == 8: await message.answer("🏆 **АЧИВКА: 'Водный Король'!** 🌊")
 
-# --- ГЛОБАЛЬНЫЙ ЧАТ (ОБРАБАТЫВАЕТ ФОТО, ГОЛОС, ТЕКСТ) ---
+# --- УМНЫЙ ЧАТ ---
 
 @dp.message()
-async def global_handler(message: types.Message):
+async def global_chat(message: types.Message):
     if message.text == "🧘 Психолог": ctx = "psych"
-    elif message.text == "🍎 Замена вредностей": await message.answer("Что вредное хочешь съесть? 👇"); return
+    elif message.text == "🍎 Замена вредностей": await message.answer("Напиши вредный продукт 👇"); return
     elif message.text == "👨‍🍳 Шеф: что в холодильнике?": await message.answer("Напиши список продуктов 👇"); return
-    elif message.text == "🥗 Что приготовить сегодня?": await message.answer("Какое блюдо хочешь (например: ужин)? 👇"); return
+    elif message.text == "🥗 Что приготовить сегодня?": await message.answer("Какое блюдо хочешь? 👇"); return
     elif message.text == "📅 Меню на месяц": ctx = "month"
     elif message.text == "🔔 Напомнить через 3ч":
         scheduler.add_job(lambda: bot.send_message(message.chat.id, "🔔 Пора поесть!"), "interval", minutes=180, id=f"rem_{message.chat.id}", replace_existing=True)
