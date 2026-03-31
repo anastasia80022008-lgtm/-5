@@ -1,4 +1,4 @@
 aiogram
-aiohttp
+google-generativeai
 flask
 apscheduler
