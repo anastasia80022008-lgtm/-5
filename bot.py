@@ -22,7 +22,7 @@ from aiogram.types import (
 )
 
 # --- НАСТРОЙКИ ---
-TOKEN = "8240168479:AAEP4vPJC7FK_ifnGRUgNbGeM0yovmN-xR0"
+TOKEN = "8240168479:AAFdCelA83nz2eMRXbcwmlVZaThEeacRQhc"
 GEMINI_KEY = "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"
 TG_CHANNEL = "https://t.me/+YOEpXfsmd9tiODQ6"
 PAID_BOT = "https://t.me/TasteMeterPlus_bot"
