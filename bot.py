@@ -18,7 +18,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, 
-    InlineKeyboardMarkup, InlineKeyboardButton
+    InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 )
 
 # --- НАСТРОЙКИ ---
@@ -64,25 +64,19 @@ def get_main_kb():
         [KeyboardButton(text="🧾 Сканер чека")]
     ], resize_keyboard=True)
 
-# --- ЛОГИКА ИИ (OpenRouter) ---
-chat_history = {}
-
+# --- ЛОГИКА ИИ ---
 async def ask_dietologist(user_id, user_text, system_type="default", photo_b64=None):
     prompts = {
         "default": "Ты - Диетолог Вкусомер Плюс. Общайся вежливо. Если пишут про еду - считай калории и пиши в конце СТРОГО: 'ИТОГО ККАЛ: [число]'.",
-        "chef": "Ты шеф-повар. Давай очень подробные рецепты с граммами и шагами 1, 2, 3.",
+        "chef": "Ты шеф-повар. Давай очень подробные рецепты с ингредиентами, граммами и шагами 1, 2, 3.",
         "psych": "Ты психолог. Поддержи пользователя, помоги не сорваться на вредную еду.",
-        "month": "Составь меню на месяц. Раздели на 'Базовую корзину' и 'Еженедельный докуп'."
+        "month": "Составь меню на месяц. Раздели на 'Базовую корзину' и 'Еженедельный докуп'. Напиши блюда подробно."
     }
-    
-    if user_id not in chat_history: chat_history[user_id] = []
     
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
     
     messages = [{"role": "system", "content": prompts.get(system_type, prompts["default"])}]
-    for h in chat_history[user_id][-4:]:
-        messages.append({"role": "user", "content": h})
     
     if photo_b64:
         messages.append({"role": "user", "content": [
@@ -98,54 +92,56 @@ async def ask_dietologist(user_id, user_text, system_type="default", photo_b64=N
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, json={"model": model, "messages": messages}) as resp:
                 res_json = await resp.json()
-                reply = res_json['choices'][0]['message']['content']
-                chat_history[user_id].append(user_text[:100])
-                return reply
-    except Exception as e:
-        return f"🧘 Диетолог задумался... ({e})"
+                return res_json['choices'][0]['message']['content']
+    except:
+        return "🧘 Диетолог отвлекся... Попробуй еще раз через минуту."
 
-# --- ОБРАБОТЧИКИ АНКЕТЫ ---
+# --- ОБРАБОТЧИКИ ---
 
 @app.route('/')
-def index(): return "Бот работает!"
+def index(): return "Vkusomer Plus Active!"
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    welcome = "✨ **Привет! Это Вкусомер Плюс.** 🥗\n\nДавай настроим твой профиль. Твой пол? 👤"
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Мужской"), KeyboardButton(text="Женский")]], resize_keyboard=True, one_time_keyboard=True)
+    welcome = (
+        "✨ **Добро пожаловать в мир осознанного питания с Вкусомер Плюс!** 🥗\n\n"
+        "Я — твой персональный ИИ-наставник и **Диетолог**. Я докажу, что путь к телу мечты — это вкусно и легко! 💪\n\n"
+        "Твой пол? 👤"
+    )
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Мужской"), KeyboardButton(text="Женский")]], resize_keyboard=True)
     await message.answer(welcome, reply_markup=kb, parse_mode="Markdown")
     await state.set_state(UserSurvey.gender)
 
 @dp.message(UserSurvey.gender)
 async def proc_gender(message: types.Message, state: FSMContext):
     await state.update_data(gender=message.text)
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Похудеть"), KeyboardButton(text="Набрать массу"), KeyboardButton(text="Вес")]], resize_keyboard=True, one_time_keyboard=True)
-    await message.answer("🎯 Какая наша цель?", reply_markup=kb)
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Похудеть"), KeyboardButton(text="Набрать массу"), KeyboardButton(text="Поддерживать вес")]], resize_keyboard=True)
+    await message.answer("🎯 Какая наша главная цель?", reply_markup=kb)
     await state.set_state(UserSurvey.goal)
 
 @dp.message(UserSurvey.goal)
 async def proc_goal(message: types.Message, state: FSMContext):
     await state.update_data(goal=message.text)
     if message.text in ["Похудеть", "Набрать массу"]:
-        await message.answer("🏁 К какому весу мы стремимся? (кг)", reply_markup=ReplyKeyboardRemove())
+        await message.answer("🏁 Какой вес твоя цель? (кг)", reply_markup=ReplyKeyboardRemove())
         await state.set_state(UserSurvey.target_w)
     else:
         await state.set_state(UserSurvey.activity)
-        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий"), KeyboardButton(text="Средний"), KeyboardButton(text="Высокий")]], resize_keyboard=True, one_time_keyboard=True)
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий"), KeyboardButton(text="Средний"), KeyboardButton(text="Высокий")]], resize_keyboard=True)
         await message.answer("🏃‍♂️ Твоя активность?", reply_markup=kb)
 
 @dp.message(UserSurvey.target_w)
 async def proc_tw(message: types.Message, state: FSMContext):
     await state.update_data(target_w=message.text)
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий"), KeyboardButton(text="Средний"), KeyboardButton(text="Высокий")]], resize_keyboard=True, one_time_keyboard=True)
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Сидячий"), KeyboardButton(text="Средний"), KeyboardButton(text="Высокий")]], resize_keyboard=True)
     await message.answer("🏃‍♂️ Твоя активность?", reply_markup=kb)
     await state.set_state(UserSurvey.activity)
 
 @dp.message(UserSurvey.activity)
 async def proc_act(message: types.Message, state: FSMContext):
     await state.update_data(activity=message.text)
-    await message.answer("🎂 Сколько тебе полных лет?", reply_markup=ReplyKeyboardRemove())
+    await message.answer("🎂 Сколько тебе лет?", reply_markup=ReplyKeyboardRemove())
     await state.set_state(UserSurvey.age)
 
 @dp.message(UserSurvey.age)
@@ -161,26 +157,28 @@ async def proc_h(message: types.Message, state: FSMContext):
     await state.set_state(UserSurvey.weight)
 
 @dp.message(UserSurvey.weight)
-async def proc_survey_finish(message: types.Message, state: FSMContext):
+async def survey_final(message: types.Message, state: FSMContext):
     w = int(message.text); d = await state.get_data()
     bmr = (10 * w) + (6.25 * d['height']) - (5 * d['age']) + (5 if d['gender'] == "Мужской" else -161)
     norma = int(bmr * 1.3)
     if d['goal'] == "Похудеть": norma -= 400
+    
     db_commit("INSERT OR REPLACE INTO users (id, norma, total_today, water, streak, last_date, weight, target, avatar) VALUES (?, ?, 0, 0, 1, ?, ?, ?, ?)",
               (message.from_user.id, norma, str(datetime.now().date()), w, d.get('target_w', w), "🧘 Спокойный дзен"))
+    
     await message.answer("✅ **Твой профиль успешно создан! Тест пройден.**")
-    await message.answer(f"Твоя норма: **{norma} ккал**. Пиши мне что угодно!", reply_markup=get_main_kb())
+    await message.answer(f"Твоя норма: **{norma} ккал**. Пиши мне или жми кнопки!", reply_markup=get_main_kb())
     await state.clear()
 
-# --- ОСНОВНЫЕ ФУНКЦИИ ---
+# --- КНОПКИ ---
 
 @dp.message(F.text == "📊 Мой статус")
 async def show_status(message: types.Message):
-    u = db_query("SELECT norma, total_today, water, weight, target, avatar FROM users WHERE id=?", (message.from_user.id,))
+    u = db_query("SELECT norma, total_today, water, weight, target FROM users WHERE id=?", (message.from_user.id,))
     if u:
         percent = int((u[1]/u[0])*100) if u[1]>0 else 0
         bar = "🟩" * (percent // 10) + "⬜" * (10 - (percent // 10))
-        await message.answer(f"📊 **ТВОЙ СТАТУС:**\n⚖️ Вес: {u[3]} -> {u[4]} кг\n🍎 Еда: {bar} {u[1]}/{u[0]} ккал\n💧 Вода: {u[2]}/8 ст.\n\n📢 Канал: {TG_CHANNEL}")
+        await message.answer(f"📊 **ТВОЙ СТАТУС:**\nЦель: {u[3]} -> {u[4]} кг\n\n🍎 Еда: {bar} {u[1]}/{u[0]} ккал\n💧 Вода: {'🟦' * u[2]} {u[2]}/8 стаканов\n\n📢 Канал: {TG_CHANNEL}")
 
 @dp.message(F.text == "💧 +1 Стакан воды")
 async def water_up(message: types.Message):
@@ -190,7 +188,22 @@ async def water_up(message: types.Message):
     if val == 8: await message.answer("🏆 **АЧИВКА: 'Водный Король'!** 🌊")
     else: await message.answer(f"💧 Стакан засчитан! ({val}/8)")
 
-# --- ГЛОБАЛЬНЫЙ ЧАТ ---
+@dp.message(F.text == "📅 Меню на месяц")
+async def month_plan(message: types.Message):
+    await message.answer("⏳ Составляю стратегию на месяц...")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📩 Отправить сообщением", callback_data="send_text")],
+        [InlineKeyboardButton(text="📄 Скачать PDF (в работе)", callback_data="none")]
+    ])
+    await message.answer("План готов! Как тебе его передать?", reply_markup=kb)
+
+@dp.callback_query(F.data == "send_text")
+async def send_month_text(call: types.CallbackQuery):
+    res = await ask_dietologist(call.from_user.id, "Составь меню на месяц", "month")
+    await call.message.answer(res)
+    await call.answer()
+
+# --- УМНЫЙ ЧАТ ---
 
 @dp.message()
 async def global_handler(message: types.Message):
@@ -199,16 +212,14 @@ async def global_handler(message: types.Message):
     elif message.text == "👨‍🍳 Шеф: что в холодильнике?": await message.answer("Напиши продукты через запятую 👇"); return
     elif message.text == "🍎 Замена вредностей": await message.answer("Что вредное хочешь съесть? 👇"); return
     elif message.text == "🥗 Что приготовить сегодня?": ctx = "chef"
-    elif message.text == "📅 Меню на месяц": ctx = "month"
-    elif message.text == "🔔 Напомнить через 3ч":
-        scheduler.add_job(lambda: bot.send_message(message.chat.id, "🔔 Пора поесть!"), "interval", minutes=180, id=f"rem_{message.chat.id}", replace_existing=True)
-        await message.answer("✅ Напомню!"); return
     elif message.text == "💬 Просто поболтать": await message.answer("Я тебя слушаю! 😊"); return
     elif message.text == "📝 Записать еду": await message.answer("Пришли фото тарелки или напиши текстом! 📸"); return
     elif message.text == "🧾 Сканер чека": await message.answer("Пришли фото чека! 🛒"); return
+    elif message.text == "🔔 Напомнить через 3ч":
+        scheduler.add_job(lambda: bot.send_message(message.chat.id, "🔔 Пора поесть!"), "interval", minutes=180, id=f"rem_{message.chat.id}", replace_existing=True)
+        await message.answer("✅ Напомню!"); return
     else: ctx = "default"
 
-    # Исправленная функция typing (для aiogram 3.x)
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     
     photo_b64 = None
@@ -219,6 +230,7 @@ async def global_handler(message: types.Message):
 
     res = await ask_dietologist(message.from_user.id, message.text or message.caption or "Анализ", ctx, photo_b64)
     
+    # Сумматор калорий
     cals = re.findall(r"ИТОГО ККАЛ: (\d+)", res)
     if not cals: cals = re.findall(r"ККАЛ: (\d+)", res)
     if cals:
@@ -226,7 +238,7 @@ async def global_handler(message: types.Message):
         if u:
             new_t = u[0] + int(cals[0])
             db_commit("UPDATE users SET total_today=? WHERE id=?", (new_t, message.from_user.id))
-            res += f"\n\n📈 (Записано: +{cals[0]} ккал. Всего за день: {new_t}/{u[1]})"
+            res += f"\n\n📈 (Записано: +{cals[0]} ккал. Итого за день: {new_t}/{u[1]})"
 
     await message.answer(res, reply_markup=get_main_kb())
 
