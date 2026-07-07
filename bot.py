@@ -22,8 +22,8 @@ from aiogram.types import (
 import aiohttp
 
 # --- НАСТРОЙКИ (ВСТАВЬ СВОИ ДАННЫЕ) ---
-TOKEN = "ТВОЙ_ТОКЕН_ОТ_BOTFATHER"
-OPENROUTER_KEY = "ТВОЙ_КЛЮЧ_OPENROUTER"
+TOKEN = "8240168479:AAFdCelA83nz2eMRXbcwmlVZaThEeacRQhc"
+OPENROUTER_KEY = "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"
 TG_CHANNEL = "https://t.me/+YOEpXfsmd9tiODQ6"  # Ссылка на твой канал
 
 logging.basicConfig(level=logging.INFO)
